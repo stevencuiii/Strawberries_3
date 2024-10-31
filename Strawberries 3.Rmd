@@ -1,0 +1,346 @@
+---
+title: "615 Assignment Strawberries 3"
+author: "Haoran Cui"
+date: "2024-10-02"
+output: pdf_document
+---
+#Preparing data for analysis —— Strawberries
+
+```{R}
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+
+```
+
+```{R}
+# Load the data from a CSV file and view the first few rows
+strawberry <- read_csv("strawberries25_v3.csv", col_names = TRUE)
+head(strawberry)
+
+```
+
+```{R}
+# Replace any occurrences of "(D)" in Value and CV% columns with NA (missing value)
+strawberry <- strawberry %>%
+  mutate(
+    Value = ifelse(Value == "(D)", NA, Value),
+    `CV (%)` = ifelse(`CV (%)` == "(D)", NA, `CV (%)`)
+  )
+head(strawberry)
+
+```
+
+```{R}
+# Rearrange 'Domain' column into three new columns: chemical category, name, and number
+strawberry <- strawberry %>%
+  mutate(
+    Category = case_when(
+      Domain == "Total" ~ NA_character_,  # If Domain is "Total", mark as NA
+      str_detect(Domain, "CHEMICAL") ~ str_trim(str_remove(Domain, "CHEMICAL, ")),  # Remove "CHEMICAL, " from Domain
+      TRUE ~ Domain
+    )
+  )
+unique(strawberry$Category)
+head(strawberry)
+
+```
+
+```{R}
+# Extract "Name" and "Number" from the 'Domain Category' column
+strawberry <- strawberry %>%
+  mutate(
+    Name = case_when(
+      Category == "TOTAL" ~ NA_character_,  # If Category is "TOTAL", mark as NA
+      str_detect(`Domain Category`, fixed(Category)) & str_detect(`Domain Category`, "\\(.*=.*\\)") ~ 
+        str_extract(`Domain Category`, "(?<=\\().*?(?=\\s?=)"),  # Extract Name from Domain Category
+      str_detect(`Domain Category`, fixed(Category)) & str_detect(`Domain Category`, "\\(.*\\)") ~ 
+        str_extract(`Domain Category`, "(?<=\\().*?(?=\\))"),  # Another pattern for extraction
+      TRUE ~ NA_character_
+    ),
+    Number = case_when(
+      Category == "TOTAL" ~ NA_real_,  # If Category is "TOTAL", mark as NA
+      str_detect(`Domain Category`, fixed(Category)) & str_detect(`Domain Category`, "\\(.*=.*\\)") ~ 
+        as.numeric(str_extract(`Domain Category`, "(?<=\\=\\s?).*?(?=\\))")),  # Extract Number from Domain Category
+      str_detect(`Domain Category`, fixed(Category)) & str_detect(`Domain Category`, "\\(.*\\)") ~ 
+        NA_real_,  # If no number, mark as NA
+      TRUE ~ NA_real_
+    )
+  )
+
+```
+
+```{R}
+strawberry <- strawberry %>%
+  mutate(Category = case_when(
+    `Domain Category` == "NOT SPECIFIED" ~ NA_character_,  # If Domain Category is "NOT SPECIFIED", mark as NA
+    TRUE ~ Category  # Otherwise, retain the existing Category
+  ))
+head(strawberry)
+
+```
+
+```{R}
+# Clean and extract numerical intervals for planted area, creating Min and Max columns
+strawberry <- strawberry %>%
+  mutate(
+    Min = case_when(
+      str_detect(Name, "100 OR MORE ACRES") ~ 100,  # If the text says "100 OR MORE ACRES", Min is 100
+      str_detect(Name, "TO") ~ as.numeric(str_extract(Name, "^[0-9.]+")),  # Extract Min value from intervals like "X TO Y"
+      TRUE ~ NA_real_
+    ),
+    Max = case_when(
+      str_detect(Name, "100 OR MORE ACRES") ~ "MORE",  # For "100 OR MORE ACRES", Max is "MORE"
+      str_detect(Name, "TO") ~ str_extract(Name, "(?<=TO )^[0-9.]+"),  # Extract Max value from intervals
+      TRUE ~ NA_character_
+    )
+  )
+
+# View the cleaned data
+head(strawberry)
+
+```
+
+```{R}
+# Extract 'Unit' from the 'Data Item' column (substring after "MEASURED")
+strawberry <- strawberry %>%
+  mutate(Unit = str_extract(strawberry$`Data Item`, "(?<=MEASURED ).*"))
+
+# Extract 'Type' by identifying either "BEARING" or "ORGANIC" in the 'Data Item' column
+strawberry <- strawberry %>%
+  mutate(Type = str_extract(strawberry$`Data Item`, "BEARING|ORGANIC"))
+
+# Extract 'Operation' by removing 'MEASURED', 'BEARING', and 'ORGANIC'
+strawberry <- strawberry %>%
+  mutate(Operation = str_replace_all(strawberry$`Data Item`, "MEASURED.*|BEARING|ORGANIC", "") %>%
+           str_trim())
+
+# Further clean 'Operation' by removing additional terms ('STRAWBERRIES', commas, hyphens)
+strawberry <- strawberry %>%
+  mutate(Operation = str_replace_all(strawberry$`Data Item`, "MEASURED.*|BEARING|ORGANIC|STRAWBERRIES(, | - )", "") %>%
+           str_replace_all("[-,]", "") %>%
+           str_trim())
+
+# View the resulting data
+head(strawberry)
+
+```
+
+```{R}
+# Export the cleaned data to a CSV file
+write.csv(strawberry, "cleaned_strawberries.csv", row.names = FALSE)
+
+```
+
+```{R}
+# Check the structure of the cleaned dataset
+str(strawberry)
+
+```
+
+cleaned_strawberries.csv
+```{R}
+strawberries <- read.csv("cleaned_strawberries.csv")
+
+# Function to filter by category, state, and group by Name
+filter_and_group <- function(data, category) {
+  filtered_data <- subset(data, Category == category & State == "FLORIDA")
+  grouped_data <- split(filtered_data, filtered_data$Name) # Group by Name
+  return(grouped_data)
+}
+
+# Apply the function to each category
+fungicide_florida_grouped <- filter_and_group(strawberries, "FUNGICIDE")
+herbicide_florida_grouped <- filter_and_group(strawberries, "HERBICIDE")
+insecticide_florida_grouped <- filter_and_group(strawberries, "INSECTICIDE")
+other_florida_grouped <- filter_and_group(strawberries, "OTHER")
+
+```
+
+```{R}
+library(ggplot2)
+
+# Function to create bar plots for each group
+visualize_grouped_data <- function(grouped_data, title) {
+  # Combine the data for easier plotting
+  combined_data <- do.call(rbind, grouped_data)
+  
+  # Create a bar plot
+  ggplot(combined_data, aes(x = Name)) +
+    geom_bar() +
+    labs(title = title, x = "Name", y = "Count") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+# Visualize each category
+visualize_grouped_data(fungicide_florida_grouped, "Fungicide Usage in Florida")
+visualize_grouped_data(herbicide_florida_grouped, "Herbicide Usage in Florida")
+visualize_grouped_data(insecticide_florida_grouped, "Insecticide Usage in Florida")
+visualize_grouped_data(other_florida_grouped, "Other Usage in Florida")
+```
+Plot Explanation:
+1. Each plot displays the count of various chemicals used in a specific category (fungicide, herbicide, etc.).
+2. The x-axis lists different chemical names.
+3. The y-axis represents the count of each chemical.
+4. The bars represent the usage count of each chemical in that category.
+
+Title and Axes:
+1. Each plot has a title specifying the type of chemical usage (e.g., "Fungicide Usage in Florida").
+2. Chemical names are displayed on the x-axis, rotated at a 45-degree angle to fit them within the plot.
+3. The y-axis shows the count of each chemical.
+
+Each of the four plots represents the chemical usage data for a specific category, helping to compare the usage of different chemicals in each category
+
+```{R}
+# Function to filter by category and state, then find the most and least frequent Name
+find_most_least_frequent <- function(data, category) {
+  # Filter data by category and state (Florida)
+  filtered_data <- subset(data, Category == category & State == "FLORIDA")
+  
+  # Count occurrences of each Name
+  name_counts <- table(filtered_data$Name)
+  
+  # Find the most frequent Name
+  most_frequent <- names(name_counts[name_counts == max(name_counts)])
+  
+  # Find the least frequent Name
+  least_frequent <- names(name_counts[name_counts == min(name_counts)])
+  
+  return(list("most_frequent" = most_frequent, "least_frequent" = least_frequent))
+}
+
+# Apply the function to each category
+fungicide_florida_freq <- find_most_least_frequent(strawberries, "FUNGICIDE")
+herbicide_florida_freq <- find_most_least_frequent(strawberries, "HERBICIDE")
+insecticide_florida_freq <- find_most_least_frequent(strawberries, "INSECTICIDE")
+other_florida_freq <- find_most_least_frequent(strawberries, "OTHER")
+
+# Print the results for each category
+print("Fungicide:")
+print(fungicide_florida_freq)
+
+print("Herbicide:")
+print(herbicide_florida_freq)
+
+print("Insecticide:")
+print(insecticide_florida_freq)
+
+print("Other:")
+print(other_florida_freq)
+```
+
+```{R}
+library(tidyverse)
+library(PubChemR)
+
+# Function to retrieve the GHS hazard statements with error handling
+GHS_searcher <- function(result_json_object) {
+  # Check if 'result', 'Hierarchies', and 'Hierarchy' exist and are not null
+  if (!is.null(result_json_object[["result"]]) &&
+      !is.null(result_json_object[["result"]][["Hierarchies"]]) &&
+      !is.null(result_json_object[["result"]][["Hierarchies"]][["Hierarchy"]])) {
+    
+    hierarchy_list <- result_json_object[["result"]][["Hierarchies"]][["Hierarchy"]]
+    
+    # Loop through the hierarchy list and check for the GHS Classification
+    for (i in seq_along(hierarchy_list)) {
+      if (!is.null(hierarchy_list[[i]][["SourceName"]]) && 
+          hierarchy_list[[i]][["SourceName"]] == "GHS Classification (UNECE)") {
+        return(i)  # Return the index where GHS Classification is found
+      }
+    }
+  }
+  
+  # If no GHS classification is found, return NA
+  return(NA)
+}
+
+# Function to retrieve hazard details from the hierarchy with error handling
+hazards_retriever <- function(index, result_json_object) {
+  if (!is.na(index)) {
+    hierarchy <- result_json_object[["result"]][["Hierarchies"]][["Hierarchy"]][[index]]
+    if (!is.null(hierarchy[["Node"]])) {
+      i <- 1
+      output_list <- rep(NA, length(hierarchy[["Node"]]))
+      
+      while (i <= length(hierarchy[["Node"]]) && 
+             !is.null(hierarchy[["Node"]][[i]][["Information"]][["Name"]]) &&
+             str_detect(hierarchy[["Node"]][[i]][["Information"]][["Name"]], "H")) {
+        output_list[i] <- hierarchy[["Node"]][[i]][["Information"]][["Name"]]
+        i <- i + 1
+      }
+      
+      return(output_list[!is.na(output_list)])  # Return non-NA hazard statements
+    }
+  }
+  
+  return(paste("No hazard information found"))
+}
+
+# Function to fetch and print hazard statements for a chemical
+fetch_hazard_statements <- function(chemical_name) {
+  result <- get_pug_rest(identifier = chemical_name, namespace = "name", domain = "compound", operation = "classification", output = "JSON")
+  index <- GHS_searcher(result)
+  if (!is.na(index)) {
+    hazards <- hazards_retriever(index, result)
+    return(hazards)
+  } else {
+    return(paste("No GHS classification found for", chemical_name))
+  }
+}
+
+# Function to filter by category and state, then find the most and least frequent Name
+find_most_least_frequent <- function(data, category) {
+  # Filter data by category and state (Florida)
+  filtered_data <- subset(data, Category == category & State == "FLORIDA")
+  
+  # Count occurrences of each Name
+  name_counts <- table(filtered_data$Name)
+  
+  # Find the most frequent Name
+  most_frequent <- names(name_counts[name_counts == max(name_counts)])
+  
+  # Find the least frequent Name
+  least_frequent <- names(name_counts[name_counts == min(name_counts)])
+  
+  return(list("most_frequent" = most_frequent, "least_frequent" = least_frequent))
+}
+
+# Assuming 'strawberries' data has already been loaded
+# Retrieve the most and least frequent chemicals for each group
+fungicide_florida_freq <- find_most_least_frequent(strawberries, "FUNGICIDE")
+herbicide_florida_freq <- find_most_least_frequent(strawberries, "HERBICIDE")
+insecticide_florida_freq <- find_most_least_frequent(strawberries, "INSECTICIDE")
+other_florida_freq <- find_most_least_frequent(strawberries, "OTHER")
+
+categories <- list(
+  "Fungicide" = fungicide_florida_freq,
+  "Herbicide" = herbicide_florida_freq,
+  "Insecticide" = insecticide_florida_freq,
+  "Other" = other_florida_freq
+)
+
+# Loop through each category to get hazard statements for the most and least frequent chemicals
+for (category in names(categories)) {
+  cat(paste("\nCategory:", category, "\n"))
+  
+  # Most frequent chemical
+  most_frequent <- categories[[category]]$most_frequent
+  cat(paste("Most frequent chemical:", most_frequent, "\n"))
+  most_hazards <- fetch_hazard_statements(most_frequent)
+  print(most_hazards)
+  
+  # Least frequent chemical
+  least_frequent <- categories[[category]]$least_frequent
+  cat(paste("Least frequent chemical:", least_frequent, "\n"))
+  least_hazards <- fetch_hazard_statements(least_frequent)
+  print(least_hazards)
+}
+
+```
